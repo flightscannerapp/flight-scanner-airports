@@ -1,9 +1,0 @@
-{
-  "format": 2,
-  "airports": 85815,
-  "aliases": 110925,
-  "runways": 14855,
-  "alias_collisions_resolved": 4822,
-  "alias_winner_replacements": 2411,
-  "source": "OurAirports public-domain data"
-}
