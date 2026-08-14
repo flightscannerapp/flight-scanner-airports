@@ -1,0 +1,118 @@
+name: Update airport directory
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Every Monday at 04:17 UTC.
+    # Change to "17 4 * * *" if you want it daily.
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: write
+
+jobs:
+  update-airports:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Download latest OurAirports data
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .airport-source
+          curl --fail --location --retry 3 \
+            https://ourairports.com/data/airports.csv \
+            --output .airport-source/airports.csv
+          curl --fail --location --retry 3 \
+            https://ourairports.com/data/runways.csv \
+            --output .airport-source/runways.csv
+
+          test -s .airport-source/airports.csv
+          test -s .airport-source/runways.csv
+
+      - name: Build new airport shards
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f build_airport_runway_shards.py
+
+          rm -rf airport-data-new
+
+          python3 build_airport_runway_shards.py \
+            --airports .airport-source/airports.csv \
+            --runways .airport-source/runways.csv \
+            --output airport-data-new
+
+      - name: Validate generated data
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -s airport-data-new/manifest.json
+
+          # All 36 A-Z / 0-9 shard files must exist and be non-empty.
+          for shard in {A..Z} {0..9}; do
+            test -s "airport-data-new/${shard}.json"
+          done
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          new_path = Path("airport-data-new/manifest.json")
+          old_path = Path("airport-data/manifest.json")
+
+          new = json.loads(new_path.read_text(encoding="utf-8"))
+
+          for key in ("airports", "aliases", "runways"):
+              value = int(new.get(key, 0))
+              if value <= 0:
+                  raise SystemExit(f"Invalid generated manifest: {key}={value}")
+
+          # If an old manifest exists, refuse a suspiciously large data loss.
+          # This protects production from a broken/partial upstream download.
+          if old_path.exists():
+              old = json.loads(old_path.read_text(encoding="utf-8"))
+              for key in ("airports", "aliases", "runways"):
+                  old_value = int(old.get(key, 0))
+                  new_value = int(new.get(key, 0))
+                  if old_value > 0 and new_value < old_value * 0.80:
+                      raise SystemExit(
+                          f"Safety check failed: {key} fell from "
+                          f"{old_value} to {new_value}"
+                      )
+
+          print("Airport data validation passed:")
+          print(json.dumps(new, indent=2))
+          PY
+
+      - name: Replace production airport data
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf airport-data
+          mv airport-data-new airport-data
+          rm -rf .airport-source
+
+      - name: Commit only when the dataset changed
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if git diff --quiet -- airport-data; then
+            echo "OurAirports data has not changed."
+            exit 0
+          fi
+
+          git config user.name "flight-scanner-airport-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add airport-data
+          git commit -m "Update airport directory $(date -u +'%Y-%m-%d')"
+          git push
