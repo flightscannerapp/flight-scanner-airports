@@ -1,8 +1,8 @@
 {
   "format": 1,
-  "airports": 85896,
-  "aliases": 115852,
-  "runways": 14848,
+  "airports": 85915,
+  "aliases": 115876,
+  "runways": 14846,
   "shards": 36,
   "source": "OurAirports public-domain data"
 }
