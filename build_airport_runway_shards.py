@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Build compact jsDelivr airport/runway JSON shards from OurAirports CSV files.
 
+Alias collisions are resolved by code type so globally recognised airport codes
+cannot be overwritten by weaker local identifiers. In particular, three-letter
+IATA codes and four-letter ICAO codes win over GPS/ident/local-code collisions.
+
 Example:
   python build_airport_runway_shards.py \
       --airports airports.csv \
@@ -40,6 +44,37 @@ def rounded(value: float) -> float:
     return round(value, 6)
 
 
+def alias_priority(kind: str, code: str) -> int:
+    """Return the precedence for one alias source.
+
+    Standard-length IATA/ICAO identifiers get the strongest scores. This makes
+    HAJ resolve to Hannover (IATA HAJ / ICAO EDDV) even when another airport has
+    HAJ only as a local code. Local codes remain searchable when no stronger
+    identifier owns the same alias.
+    """
+    if kind == "iata":
+        return 500 if len(code) == 3 else 450
+    if kind == "icao":
+        return 500 if len(code) == 4 else 450
+    if kind == "gps":
+        return 400
+    if kind == "ident":
+        return 350
+    if kind == "local":
+        return 100
+    return 0
+
+
+def add_alias(aliases: dict[str, int], value: str | None, kind: str) -> None:
+    code = clean_code(value)
+    if not code:
+        return
+    priority = alias_priority(kind, code)
+    previous = aliases.get(code)
+    if previous is None or priority > previous:
+        aliases[code] = priority
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--airports", required=True, type=Path)
@@ -58,21 +93,27 @@ def main() -> None:
             if (row.get("type") or "").strip().lower() == "closed_airport":
                 continue
 
+            iata = clean_code(row.get("iata_code"))
+            icao = clean_code(row.get("icao_code"))
+            gps = clean_code(row.get("gps_code"))
+            local = clean_code(row.get("local_code"))
+
+            aliases: dict[str, int] = {}
+            add_alias(aliases, iata, "iata")
+            add_alias(aliases, icao, "icao")
+            add_alias(aliases, gps, "gps")
+            add_alias(aliases, ident, "ident")
+            add_alias(aliases, local, "local")
+
             airport_rows[ident] = {
                 "n": (row.get("name") or ident).strip()[:80],
-                "i": clean_code(row.get("iata_code")),
-                "c": clean_code(row.get("icao_code") or row.get("gps_code") or ident),
+                "i": iata,
+                "c": icao or gps or ident,
                 "lat": rounded(lat),
                 "lon": rounded(lon),
                 "e": parse_int(row.get("elevation_ft")),
                 "r": [],
-                "aliases": {
-                    ident,
-                    clean_code(row.get("gps_code")),
-                    clean_code(row.get("icao_code")),
-                    clean_code(row.get("iata_code")),
-                    clean_code(row.get("local_code")),
-                },
+                "aliases": aliases,
             }
 
     with args.runways.open("r", encoding="utf-8-sig", newline="") as handle:
@@ -104,25 +145,42 @@ def main() -> None:
             ])
 
     shards: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
+    shard_priorities: dict[str, dict[str, int]] = defaultdict(dict)
     airport_count = 0
-    alias_count = 0
     runway_count = 0
+    collision_count = 0
+    stronger_replacements = 0
 
     for airport in airport_rows.values():
-        aliases = sorted(code for code in airport.pop("aliases") if code)
+        aliases: dict[str, int] = airport.pop("aliases")
         if not aliases:
             continue
+
         airport["r"] = airport["r"][:16]
         if airport["e"] is None:
             airport.pop("e")
         airport_count += 1
         runway_count += len(airport["r"])
-        for alias in aliases:
+
+        for alias, priority in sorted(aliases.items()):
             shard = alias[0]
             if not shard.isalnum():
                 continue
-            shards[shard][alias] = airport
-            alias_count += 1
+
+            previous_priority = shard_priorities[shard].get(alias)
+            if previous_priority is None:
+                shards[shard][alias] = airport
+                shard_priorities[shard][alias] = priority
+                continue
+
+            collision_count += 1
+            if priority > previous_priority:
+                shards[shard][alias] = airport
+                shard_priorities[shard][alias] = priority
+                stronger_replacements += 1
+            # Equal or weaker aliases do not overwrite the existing airport.
+
+    alias_count = sum(len(payload) for payload in shards.values())
 
     args.output.mkdir(parents=True, exist_ok=True)
     for shard in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789":
@@ -139,6 +197,8 @@ def main() -> None:
         "aliases": alias_count,
         "runways": runway_count,
         "shards": 36,
+        "collisions": collision_count,
+        "stronger_alias_replacements": stronger_replacements,
         "source": "OurAirports public-domain data",
     }
     (args.output / "manifest.json").write_text(
