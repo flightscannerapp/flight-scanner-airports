@@ -1,10 +1,10 @@
 {
   "format": 1,
-  "airports": 85945,
-  "aliases": 111101,
-  "runways": 14852,
+  "airports": 86002,
+  "aliases": 111166,
+  "runways": 14862,
   "shards": 36,
-  "collisions": 4834,
-  "stronger_alias_replacements": 2145,
+  "collisions": 4841,
+  "stronger_alias_replacements": 2150,
   "source": "OurAirports public-domain data"
 }
