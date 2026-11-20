@@ -26,10 +26,10 @@ jobs:
           set -euo pipefail
           mkdir -p .airport-source
           curl --fail --location --retry 3 \
-            https://ourairports.com/data/airports.csv \
+            https://davidmegginson.github.io/ourairports-data/airports.csv \
             --output .airport-source/airports.csv
           curl --fail --location --retry 3 \
-            https://ourairports.com/data/runways.csv \
+            https://davidmegginson.github.io/ourairports-data/runways.csv \
             --output .airport-source/runways.csv
 
           test -s .airport-source/airports.csv
